@@ -58,6 +58,19 @@ const SPACE_KINDS = {
     objects:[{t:"deur",x:300,y:0}]}
 };
 
+// line icons for the room chooser (24×24, stroke = currentColor)
+const KIND_ICONS = {
+  slaapkamer: '<path d="M3 18v-7a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v7M3 15h18M3 18v2M21 18v2"/><rect x="6" y="6" width="5" height="3" rx="1"/>',
+  schuur:     '<path d="M3 10 12 4l9 6v10H3z"/><path d="M9 20v-6h6v6"/>',
+  garage:     '<path d="M3 9 12 4l9 5v11H3z"/><path d="M6 20v-8h12v8M6 15h12M6 18h12"/>',
+  zolder:     '<path d="M2 18 12 6l10 12z"/><path d="M9 18v-4h6v4"/>',
+  kelder:     '<path d="M3 4h18v16H3z"/><path d="M6 17h3v-3h3v-3h3V8h3"/>',
+  unit:       '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 9h16M4 13h16M4 17h16"/>',
+  magazijn:   '<path d="M2 20V8l10-4 10 4v12"/><path d="M6 20v-9h12v9M6 14h12M6 17h12"/>',
+  anders:     '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 8v8M8 12h8"/>'
+};
+const icon = d => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+
 // ---------- data helpers ----------
 const spaceOf = id => plan?.spaces.find(s => s.id === id);
 function findObj(objId){
@@ -163,6 +176,7 @@ function planSvg(s, mode, opt = {}){
       ${label ? `<text class="ol" x="${cx}" y="${cy}" font-size="${fs}">${esc(label)}</text>` : ""}${badge}</g>`;
   }).join("");
   return `<svg class="plan-svg ${mode}" viewBox="${-pad} ${-pad} ${s.w + 2*pad} ${s.h + 2*pad}" data-space="${s.id}" role="img" aria-label="Plattegrond ${esc(s.name)}">
+    <defs><pattern id="hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="12" height="12" fill="var(--sunk)"/><line x1="0" y1="0" x2="0" y2="12" stroke="var(--line-2)" stroke-width="3"/></pattern></defs>
     <rect class="floor" x="0" y="0" width="${s.w}" height="${s.h}"/>${grid.join("")}
     <rect class="wall" x="0" y="0" width="${s.w}" height="${s.h}" fill="none"/>
     <text class="dim-t" x="${s.w/2}" y="${-pad*.35}" font-size="${fs*.9}">${m(s.w)}</text>
@@ -190,9 +204,9 @@ function renderPlan(){
 
 function kindChooser(first){
   return `<div class="panel stack plan-start">
-    ${first ? `<div><h2>Maak eerst je plattegrond</h2><p class="note" style="margin:4px 0 0">Teken waar je voorraad ligt: je slaapkamer, schuur of gehuurde ruimte. Daarna kies je bij elk artikel een plek, en zie je bij het zoeken meteen waar het ligt.</p></div>`
+    ${first ? `<div><span class="step">Stap 1 van 2</span><h2>Waar bewaar je je voorraad?</h2><p class="note" style="margin:6px 0 0">Teken waar je voorraad ligt: je slaapkamer, schuur of gehuurde ruimte. Daarna kies je bij elk artikel een plek, en zie je bij het zoeken meteen waar het ligt.</p></div>`
             : `<div class="dlg-head"><h2>Ruimte toevoegen</h2><button class="btn ghost" data-act="cancel-space" aria-label="Annuleren">✕</button></div>`}
-    <div class="kinds">${Object.entries(SPACE_KINDS).map(([k, K]) => `<button class="kind" data-kind="${k}"><b>${esc(K.label)}</b><span>${esc(K.hint)}</span></button>`).join("")}</div>
+    <div class="kinds">${Object.entries(SPACE_KINDS).map(([k, K]) => `<button class="kind" data-kind="${k}">${icon(KIND_ICONS[k] || KIND_ICONS.anders)}<b>${esc(K.label)}</b><span>${esc(K.hint)}</span></button>`).join("")}</div>
     <form class="stack" id="kind-form" hidden>
       <div class="grid2">
         <label class="f">Naam<input type="text" id="k-name" required maxlength="40"></label>
@@ -200,7 +214,7 @@ function kindChooser(first){
         <label class="f">Lengte (m)<input type="number" id="k-h" min="0.5" max="100" step="0.1" inputmode="decimal" required></label>
       </div>
       <p class="note" id="k-hint" style="margin:0"></p>
-      <div class="row"><button class="btn primary" type="submit">Ruimte maken</button><button class="btn ghost" type="button" data-act="kind-back">Andere ruimte kiezen</button></div>
+      <div class="row"><button class="btn primary" type="submit">Ruimte maken</button><button class="btn ghost" type="button" data-act="kind-back">Terug</button></div>
     </form></div>`;
 }
 function bindKindChooser(root){
@@ -235,11 +249,10 @@ function viewView(s, tabs){
   const inSpace = items.filter(i => i.status === "voorraad" && spots.some(o => o.id === i.place?.o)).length;
   const sel = spotFilter && findObj(spotFilter);
   const otherHits = q ? plan.spaces.filter(x => x.id !== s.id && x.objects.some(o => hits.has(o.id))) : [];
-  return `<div class="plan-card">${tabs}
+  return `<div class="plan-card"><div class="plan-head">${tabs}<button class="btn" data-act="edit">Bewerken</button></div>
     <div class="plan-wrap">${planSvg(s, "view", {hits})}</div>
     <div class="plan-foot">
       <span class="note">${spots.length ? `${inSpace} ${inSpace === 1 ? "artikel" : "artikelen"} in ${spots.length} ${spots.length === 1 ? "opslagplek" : "opslagplekken"}. Tik op een plek om te zien wat er ligt.` : "Nog geen opslagplekken in deze ruimte."}</span>
-      <button class="btn" data-act="edit">Plattegrond bewerken</button>
     </div>
     ${otherHits.length ? `<div class="nudge"><span>Ook gevonden in ${otherHits.map(x => esc(x.name)).join(", ")}</span>${otherHits.map(x => `<button class="btn ink" data-space="${x.id}">${esc(x.name)}</button>`).join("")}</div>` : ""}
     ${sel ? spotInfo(sel) : ""}</div>`;
@@ -255,9 +268,9 @@ function spotInfo({space, obj}){
 
 function editView(s, tabs){
   const o = s.objects.find(x => x.id === planSel);
-  const btn = ([k, T]) => `<button class="pal" data-add="${k}">${esc(T.label)}</button>`;
+  const btn = ([k, T]) => `<button class="pal ${T.group === "store" ? "st" : ""}" data-add="${k}">${esc(T.label)}</button>`;
   return `<div class="plan-card editing">
-    <div class="row" style="justify-content:space-between"><h2>Plattegrond bewerken</h2><button class="btn primary" data-act="done">Klaar</button></div>
+    <div class="plan-head"><h2>Plattegrond bewerken</h2><button class="btn primary" data-act="done">Klaar</button></div>
     ${tabs}
     <p class="note" style="margin:0">Sleep dingen naar de goede plek. Tik op iets om het aan te passen.</p>
     <div class="plan-wrap">${planSvg(s, "edit")}</div>

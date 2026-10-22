@@ -32,9 +32,9 @@ function schedule(){ clearTimeout(syncTimer); if (user) syncTimer = setTimeout(s
 function headerStatus(){
   const el = $("#sync"), btn = $("#acct-btn"); if (!el) return;
   btn.classList.toggle("in", !!user);
-  if (!acctOn) { el.textContent = "op dit apparaat"; return; }
-  if (!user) { el.textContent = sb ? "inloggen" : "op dit apparaat"; return; }
-  el.textContent = {busy: "opslaan…", ok: "online opgeslagen", offline: "offline", error: "niet gesynct", idle: "ingelogd"}[syncState] || "ingelogd";
+  if (!acctOn) { el.textContent = "Op dit apparaat"; return; }
+  if (!user) { el.textContent = sb ? "Inloggen" : "Op dit apparaat"; return; }
+  el.textContent = {busy: "Opslaan…", ok: "Opgeslagen", offline: "Offline", error: "Niet gesynct", idle: "Ingelogd"}[syncState] || "Ingelogd";
 }
 
 function loadScript(src){
