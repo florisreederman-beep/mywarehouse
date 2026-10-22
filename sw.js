@@ -1,7 +1,7 @@
 // Keeps the app working without internet: app files come from the cache, then refresh in the background.
-const CACHE = "mywarehouse-v1";
-const FILES = ["./", "index.html", "app.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png",
-  "vendor/qrcode.js", "vendor/jsQR.js", "vendor/jspdf.umd.min.js"];
+const CACHE = "mywarehouse-v2";
+const FILES = ["./", "index.html", "app.js", "plan.js", "account.js", "config.js", "manifest.webmanifest", "icons/icon.svg", "icons/icon-192.png",
+  "vendor/qrcode.js", "vendor/jsQR.js", "vendor/jspdf.umd.min.js", "vendor/supabase.js"];
 
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); self.skipWaiting(); });
 self.addEventListener("activate", e => {

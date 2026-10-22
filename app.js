@@ -10,24 +10,40 @@ function toast(msg){ const t=$("#toast"); t.textContent=msg; t.hidden=false; cle
 
 // ---------- storage: IndexedDB on this device ----------
 let items = [];           // all item docs, kept in memory
-const DB_NAME = "mywarehouse", STORE = "items";
+const DB_NAME = "mywarehouse", STORE = "items", META = "meta";
 let idb = null;
 function openDb(){
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 1);
-    r.onupgradeneeded = () => r.result.createObjectStore(STORE, {keyPath:"code"});
+    const r = indexedDB.open(DB_NAME, 2);
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, {keyPath:"code"});
+      if (!db.objectStoreNames.contains(META)) db.createObjectStore(META); // floor plan and other settings
+    };
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-function tx(mode, fn){
+function tx(mode, fn, name = STORE){
   return new Promise((res, rej) => {
-    const t = idb.transaction(STORE, mode); const out = fn(t.objectStore(STORE));
+    const t = idb.transaction(name, mode); const out = fn(t.objectStore(name));
     t.oncomplete = () => res(out?.result); t.onerror = () => rej(t.error);
   });
 }
+const metaGet = key => tx("readonly", s => s.get(key), META);
+const metaSet = (key, val) => tx("readwrite", s => val == null ? s.delete(key) : s.put(val, key), META);
+// opts.remote: the change came from the account, so don't send it back; opts.quiet: caller renders
 const store = {
-  async put(it){ await tx("readwrite", s => s.put(it)); const i=items.findIndex(x=>x.code===it.code); if(i>=0) items[i]=it; else items.push(it); render(); },
-  async del(code){ await tx("readwrite", s => s.delete(code)); items=items.filter(x=>x.code!==code); render(); },
+  async put(it, opts = {}){
+    if (!opts.remote) it = {...it, updatedAt: new Date().toISOString()};
+    await tx("readwrite", s => s.put(it)); const i=items.findIndex(x=>x.code===it.code); if(i>=0) items[i]=it; else items.push(it);
+    if (!opts.remote) Sync.touch(it.code);
+    if (!opts.quiet) render();
+  },
+  async del(code, opts = {}){
+    await tx("readwrite", s => s.delete(code)); items=items.filter(x=>x.code!==code);
+    if (!opts.remote) Sync.removed(code);
+    if (!opts.quiet) render();
+  },
   async nextCode(){
     // never reuse a code, even after deleting: a printed label may still be around
     let n = 1; try { n = +localStorage.getItem("mw-next") || 1; } catch(e){}
@@ -42,10 +58,12 @@ async function boot(){
   try {
     idb = await openDb();
     items = await tx("readonly", s => s.getAll()) || [];
+    plan = await metaGet("plan") || null;
     navigator.storage?.persist?.();
-    $("#sync").textContent = "op dit apparaat";
+    Sync.status();
   } catch(e){ $("#sync").textContent = "opslaan lukt niet"; }
   render(); openFromHash();
+  Sync.start();
 }
 
 // downloads: a plain browser download, or the share sheet when that is all the phone offers
@@ -91,7 +109,7 @@ document.querySelectorAll("#filters .chip").forEach(c => c.addEventListener("cli
 }));
 $("#q").addEventListener("input", renderStock);
 
-function render(){ renderHome(); renderStock(); renderDatalists(); renderLabels(); renderSales(); }
+function render(){ renderHome(); renderPlan(); renderStock(); renderDatalists(); renderAddPicker(); renderLabels(); renderSales(); renderAccount(); }
 
 function itemRows(list){
   return `<div class="list">` + list.map(it => `
@@ -133,12 +151,21 @@ function renderStock(){
   let list = items.slice().sort((a,b)=> (b.createdAt||"").localeCompare(a.createdAt||""));
   if (filter !== "alles") list = list.filter(it => it.status === filter);
   if (q) list = list.filter(it => [it.code,it.title,it.brand,locText(it),it.size,it.category].join(" ").toLowerCase().includes(q));
+  if (spotFilter === "__none") list = list.filter(it => !it.place || !findObj(it.place.o));
+  else if (spotFilter) list = list.filter(it => it.place?.o === spotFilter);
   const inStock = items.filter(i=>i.status==="voorraad");
   $("#stock-sub").textContent = items.length
     ? `${inStock.length} op voorraad, samen ${eur(inStock.reduce((s,i)=>s+(i.askPrice||0),0))} vraagprijs.`
     : "Zoek een artikel en zie direct waar het ligt.";
+  // items from before the floor plan: invite to give them a spot
+  const loose = storeSpots().length ? inStock.filter(it => !it.place || !findObj(it.place.o)).length : 0;
+  $("#stock-loose").innerHTML = loose && spotFilter !== "__none"
+    ? `<div class="nudge"><span>${loose} ${loose===1?"artikel staat":"artikelen staan"} nog niet op je plattegrond.</span><button class="btn ink" id="loose-go">Bekijken</button></div>`
+    : spotFilter === "__none" ? `<div class="nudge"><span>Artikelen zonder plek. Open er een en kies <b>Verplaatsen</b>.</span><button class="btn ink" id="loose-off">Alles tonen</button></div>` : "";
+  $("#loose-go")?.addEventListener("click", () => { spotFilter = "__none"; renderPlan(); renderStock(); });
+  $("#loose-off")?.addEventListener("click", () => { spotFilter = null; renderStock(); });
   if (!items.length){ $("#stock-list").innerHTML = `<div class="empty">Nog geen artikelen. Ga naar <b>Toevoegen</b> om je eerste item in te voeren.</div>`; return; }
-  if (!list.length){ $("#stock-list").innerHTML = `<div class="empty">Niets gevonden${q?` voor “${esc(q)}”`:""}.</div>`; return; }
+  if (!list.length){ $("#stock-list").innerHTML = `<div class="empty">Niets gevonden${q?` voor “${esc(q)}”`:""}${spotFilter && spotFilter!=="__none" ? " op deze plek" : ""}.</div>`; return; }
   $("#stock-list").innerHTML = itemRows(list);
   bindRows($("#stock-list"));
 }
@@ -175,9 +202,10 @@ $("#add-form").addEventListener("submit", async e => {
       title: $("#f-title").value.trim(), brand: $("#f-brand").value.trim(), category: matchExisting("category", $("#f-cat").value.trim()),
       size: $("#f-size").value.trim(), condition: $("#f-cond").value,
       buyPrice: num($("#f-buy").value), askPrice: num($("#f-ask").value),
-      location: $("#f-loc").value.trim(), notes: $("#f-notes").value.trim(),
+      ...readSpotPicker($("#loc-picker"), "f"), notes: $("#f-notes").value.trim(),
       photo: pendingPhoto, status: "voorraad", labelPrinted: false, createdAt: new Date().toISOString(), sale: null
     };
+    lastSpot = it.place;
     await store.put(it);
     // keep category and location for the next item: you usually fill one box at a time
     ["#f-title","#f-brand","#f-size","#f-buy","#f-ask","#f-notes"].forEach(s=>$(s).value="");
@@ -208,6 +236,7 @@ function openItem(code, fallback){
       <button class="btn ghost" data-act="close" aria-label="Sluiten">✕</button></div>
     ${it.photo ? `<img class="hero" src="${esc(it.photo)}" alt="">` : ""}
     <div><div class="note" style="margin-bottom:4px">Ligt in</div><span class="loc big">${esc(locText(it) || "geen locatie")}</span></div>
+    ${miniMap(it.place)}
     <dl class="kv">
       ${it.brand?`<dt>Merk</dt><dd>${esc(it.brand)}</dd>`:""}
       <dt>Categorie</dt><dd>${esc(it.category||"–")}</dd>
@@ -251,11 +280,11 @@ function itemAction(act, it){
     $("#sp").focus();
   }
   if (act === "move"){
-    f.innerHTML = `<form class="panel stack">
-      <label class="f">Nieuwe locatie<input type="text" id="mloc" list="dl-loc" required value="${esc(locText(it))}"></label>
-      <button class="btn ink" type="submit">Nieuwe locatie opslaan</button></form>`;
+    f.innerHTML = `<form class="panel stack"><h2>Nieuwe plek</h2>${spotPicker("m", it.place, it.place ? "" : locText(it))}
+      <button class="btn ink" type="submit">Nieuwe plek opslaan</button></form>`;
+    bindSpotPicker(f, "m", it.place);
     f.querySelector("form").addEventListener("submit", async e => {
-      e.preventDefault(); const upd = {...it, location:$("#mloc").value.trim()}; delete upd.rack; delete upd.box;
+      e.preventDefault(); const upd = {...it, ...readSpotPicker(f, "m")}; delete upd.rack; delete upd.box;
       await store.put(upd); toast(`${it.code} ligt nu in ${locText(upd)}`); openItem(it.code, upd);
     });
   }
@@ -517,7 +546,7 @@ $("#donuts").addEventListener("pointerleave", () => tipEl.hidden = true);
 
 // ---------- backup ----------
 $("#bk-save").addEventListener("click", async () => {
-  const data = JSON.stringify({app:"mywarehouse", version:1, exportedAt:new Date().toISOString(), items}, null, 1);
+  const data = JSON.stringify({app:"mywarehouse", version:2, exportedAt:new Date().toISOString(), items, plan}, null, 1);
   if (await saveFile(`mywarehouse-backup-${today()}.json`, new Blob([data], {type:"application/json"}))) toast("Back-up opgeslagen");
 });
 $("#bk-file").addEventListener("change", async e => {
@@ -526,8 +555,10 @@ $("#bk-file").addEventListener("change", async e => {
     const data = JSON.parse(await f.text());
     const list = Array.isArray(data) ? data : data.items;
     if (!Array.isArray(list) || !list.every(i => i && typeof i.code === "string")) throw 0;
-    if (!confirm(`${list.length} artikelen terugzetten? Artikelen met dezelfde code worden overschreven.`)) return;
-    for (const it of list) await tx("readwrite", s => s.put(it));
+    const withPlan = data.plan?.spaces?.length > 0;
+    if (!confirm(`${list.length} artikelen${withPlan?" en de plattegrond":""} terugzetten? Artikelen met dezelfde code worden overschreven.`)) return;
+    for (const it of list) await store.put(it, {quiet:true});
+    if (withPlan){ plan = data.plan; await savePlan(); }
     items = await tx("readonly", s => s.getAll()); render();
     toast(`${list.length} artikelen teruggezet`);
   } catch(err){ toast("Dit is geen geldig back-upbestand"); }
@@ -537,5 +568,6 @@ $("#bk-file").addEventListener("change", async e => {
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(()=>{}));
 
 // ---------- start ----------
+initPlan(); initAccount();
 try{ const t = localStorage.getItem("mw-tab"); if (t && document.getElementById("tab-"+t)) showTab(t); }catch(e){}
 boot();
